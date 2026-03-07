@@ -38,6 +38,7 @@ import (
 	"github.com/rook/rook/pkg/operator/ceph/object/cosi"
 	"github.com/rook/rook/pkg/operator/ceph/object/notification"
 	"github.com/rook/rook/pkg/operator/ceph/object/realm"
+	"github.com/rook/rook/pkg/operator/ceph/object/tenant"
 	"github.com/rook/rook/pkg/operator/ceph/object/topic"
 	objectuser "github.com/rook/rook/pkg/operator/ceph/object/user"
 	"github.com/rook/rook/pkg/operator/ceph/object/zone"
@@ -91,6 +92,7 @@ var AddToManagerFuncs = []func(manager.Manager, *clusterd.Context, context.Conte
 	subvolumegroup.Add,
 	radosnamespace.Add,
 	cosi.Add,
+	tenant.Add,
 }
 
 // AddToManagerOpFunc is a list of functions to add all Controllers to the Manager (entrypoint for
