@@ -72,12 +72,13 @@ func TestOIDCConfigStructure(t *testing.T) {
 	config := &OIDCConfig{
 		IssuerURL:   "https://kubernetes.default.svc",
 		Thumbprints: []string{"ABCD1234", "EFGH5678"},
-		ClientID:    "sts.amazonaws.com",
+		ClientIDs:   []string{"kubernetes.default.svc", "kubernetes"},
 	}
 
 	assert.Equal(t, "https://kubernetes.default.svc", config.IssuerURL)
 	assert.Len(t, config.Thumbprints, 2)
-	assert.Equal(t, "sts.amazonaws.com", config.ClientID)
+	assert.Len(t, config.ClientIDs, 2)
+	assert.Equal(t, "kubernetes.default.svc", config.ClientIDs[0])
 }
 
 func TestOIDCConfigValidation(t *testing.T) {
@@ -91,7 +92,7 @@ func TestOIDCConfigValidation(t *testing.T) {
 			config: &OIDCConfig{
 				IssuerURL:   "https://kubernetes.default.svc",
 				Thumbprints: []string{"ABCD1234"},
-				ClientID:    "sts.amazonaws.com",
+				ClientIDs:   []string{"kubernetes.default.svc"},
 			},
 			wantErr: false,
 		},
@@ -100,7 +101,7 @@ func TestOIDCConfigValidation(t *testing.T) {
 			config: &OIDCConfig{
 				IssuerURL:   "",
 				Thumbprints: []string{"ABCD1234"},
-				ClientID:    "sts.amazonaws.com",
+				ClientIDs:   []string{"kubernetes.default.svc"},
 			},
 			wantErr: true,
 		},
@@ -109,7 +110,7 @@ func TestOIDCConfigValidation(t *testing.T) {
 			config: &OIDCConfig{
 				IssuerURL:   "https://kubernetes.default.svc",
 				Thumbprints: []string{},
-				ClientID:    "sts.amazonaws.com",
+				ClientIDs:   []string{"kubernetes.default.svc"},
 			},
 			wantErr: true,
 		},
