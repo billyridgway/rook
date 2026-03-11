@@ -29,8 +29,10 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
@@ -80,12 +82,13 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 	logger.Info("successfully started")
 
 	// Watch for changes to Kubernetes Namespaces
+	// Use a custom predicate since Namespaces don't have a Spec field
 	err = c.Watch(
 		source.Kind(
 			mgr.GetCache(),
 			&corev1.Namespace{},
 			&handler.TypedEnqueueRequestForObject[*corev1.Namespace]{},
-			opcontroller.WatchControllerPredicate[*corev1.Namespace](mgr.GetScheme()),
+			namespaceWatchPredicate(),
 		),
 	)
 	if err != nil {
@@ -94,6 +97,70 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 
 	logger.Info("tenant identity controller started watching namespaces")
 	return nil
+}
+
+// namespaceWatchPredicate is a custom predicate for watching Namespace objects
+// Namespaces don't have a Spec field, so we need custom logic
+func namespaceWatchPredicate() predicate.TypedFuncs[*corev1.Namespace] {
+	return predicate.TypedFuncs[*corev1.Namespace]{
+		CreateFunc: func(e event.TypedCreateEvent[*corev1.Namespace]) bool {
+			logger.Debugf("create event for namespace %q", e.Object.GetName())
+			// Only reconcile if identity binding annotation is set
+			return e.Object.Annotations[IdentityBindingAnnotation] == "true"
+		},
+		DeleteFunc: func(e event.TypedDeleteEvent[*corev1.Namespace]) bool {
+			logger.Debugf("delete event for namespace %q", e.Object.GetName())
+			// Reconcile on delete to clean up RGW accounts
+			return e.Object.Annotations[IdentityBindingAnnotation] == "true"
+		},
+		UpdateFunc: func(e event.TypedUpdateEvent[*corev1.Namespace]) bool {
+			oldNS := e.ObjectOld
+			newNS := e.ObjectNew
+
+			logger.Debugf("update event for namespace %q", newNS.GetName())
+
+			// Check if the namespace is being deleted
+			if !oldNS.GetDeletionTimestamp().Equal(newNS.GetDeletionTimestamp()) {
+				logger.Debugf("namespace %q deletion timestamp changed, reconciling", newNS.GetName())
+				return true
+			}
+
+			// Check if identity binding annotation changed
+			oldBinding := oldNS.Annotations[IdentityBindingAnnotation]
+			newBinding := newNS.Annotations[IdentityBindingAnnotation]
+			if oldBinding != newBinding {
+				logger.Infof("namespace %q identity binding annotation changed from %q to %q", newNS.GetName(), oldBinding, newBinding)
+				return true
+			}
+
+			// Only reconcile if identity binding is enabled
+			if newBinding != "true" {
+				return false
+			}
+
+			// Check if account annotations changed
+			oldAccountARN := oldNS.Annotations[AccountARNAnnotation]
+			newAccountARN := newNS.Annotations[AccountARNAnnotation]
+			if oldAccountARN != newAccountARN {
+				logger.Infof("namespace %q account ARN annotation changed", newNS.GetName())
+				return true
+			}
+
+			oldRoleARN := oldNS.Annotations[RoleARNAnnotation]
+			newRoleARN := newNS.Annotations[RoleARNAnnotation]
+			if oldRoleARN != newRoleARN {
+				logger.Infof("namespace %q role ARN annotation changed", newNS.GetName())
+				return true
+			}
+
+			// Don't reconcile on other annotation or label changes
+			return false
+		},
+		GenericFunc: func(e event.TypedGenericEvent[*corev1.Namespace]) bool {
+			logger.Debugf("generic event for namespace %q", e.Object.GetName())
+			return false
+		},
+	}
 }
 
 // Reconcile reads the state of Kubernetes Namespaces and creates RGW User Accounts for those with identity binding annotations
