@@ -28,11 +28,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	"github.com/rook/rook/pkg/clusterd"
 	opcontroller "github.com/rook/rook/pkg/operator/ceph/controller"
@@ -72,27 +69,8 @@ func newReconciler(mgr manager.Manager, context *clusterd.Context, opManagerCont
 }
 
 func add(mgr manager.Manager, r reconcile.Reconciler) error {
-	// Create a new controller
-	c, err := controller.New(controllerName, mgr, controller.Options{Reconciler: r})
-	if err != nil {
-		return err
-	}
-	logger.Info("successfully started")
-
-	// Watch for changes to Kubernetes Namespaces
-	err = c.Watch(
-		source.Kind(
-			mgr.GetCache(),
-			&corev1.Namespace{},
-			&handler.TypedEnqueueRequestForObject[*corev1.Namespace]{},
-			opcontroller.WatchControllerPredicate[*corev1.Namespace](mgr.GetScheme()),
-		),
-	)
-	if err != nil {
-		return err
-	}
-
-	logger.Info("tenant identity controller started watching namespaces")
+	// TODO: Add namespace watching once we figure out why it's getting stuck
+	logger.Info("tenant identity controller started (not watching anything yet)")
 	return nil
 }
 
