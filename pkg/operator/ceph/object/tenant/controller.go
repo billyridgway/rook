@@ -19,11 +19,9 @@ package tenant
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"time"
 
 	"github.com/coreos/pkg/capnslog"
-	projectv1 "github.com/openshift/api/project/v1"
 	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
@@ -51,12 +49,7 @@ const (
 
 var logger = capnslog.NewPackageLogger("github.com/rook/rook", "tenant-identity-controller")
 
-var controllerTypeMeta = metav1.TypeMeta{
-	Kind:       reflect.TypeFor[projectv1.Project]().Name(),
-	APIVersion: fmt.Sprintf("%s/%s", projectv1.GroupVersion.Group, projectv1.GroupVersion.Version),
-}
-
-// ReconcileTenantIdentity reconciles OpenShift Projects with identity binding annotations
+// ReconcileTenantIdentity reconciles Kubernetes Namespaces with identity binding annotations
 type ReconcileTenantIdentity struct {
 	client           client.Client
 	scheme           *runtime.Scheme
@@ -86,67 +79,67 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 	}
 	logger.Info("successfully started")
 
-	// Watch for changes to OpenShift Projects
+	// Watch for changes to Kubernetes Namespaces
 	err = c.Watch(
 		source.Kind(
 			mgr.GetCache(),
-			&projectv1.Project{TypeMeta: controllerTypeMeta},
-			&handler.TypedEnqueueRequestForObject[*projectv1.Project]{},
-			opcontroller.WatchControllerPredicate[*projectv1.Project](mgr.GetScheme()),
+			&corev1.Namespace{},
+			&handler.TypedEnqueueRequestForObject[*corev1.Namespace]{},
+			opcontroller.WatchControllerPredicate[*corev1.Namespace](mgr.GetScheme()),
 		),
 	)
 	if err != nil {
 		return err
 	}
 
-	logger.Info("tenant identity controller started")
+	logger.Info("tenant identity controller started watching namespaces")
 	return nil
 }
 
-// Reconcile reads the state of OpenShift Projects and creates RGW User Accounts for those with identity binding annotations
+// Reconcile reads the state of Kubernetes Namespaces and creates RGW User Accounts for those with identity binding annotations
 func (r *ReconcileTenantIdentity) Reconcile(ctx context.Context, request reconcile.Request) (reconcile.Result, error) {
-	logger.Debugf("reconciling tenant identity for project %q", request.NamespacedName)
+	logger.Infof("reconciling tenant identity for namespace %q", request.NamespacedName)
 
-	// Fetch the Project instance
-	project := &projectv1.Project{}
-	err := r.client.Get(ctx, request.NamespacedName, project)
+	// Fetch the Namespace instance
+	namespace := &corev1.Namespace{}
+	err := r.client.Get(ctx, request.NamespacedName, namespace)
 	if err != nil {
 		if kerrors.IsNotFound(err) {
-			logger.Debugf("project %q not found, ignoring", request.NamespacedName)
+			logger.Debugf("namespace %q not found, ignoring", request.NamespacedName)
 			return reconcile.Result{}, nil
 		}
-		return reconcile.Result{}, errors.Wrapf(err, "failed to get project %q", request.NamespacedName)
+		return reconcile.Result{}, errors.Wrapf(err, "failed to get namespace %q", request.NamespacedName)
 	}
 
-	// Check if the project is being deleted
-	if !project.DeletionTimestamp.IsZero() {
-		logger.Infof("project %q is being deleted, cleaning up RGW account", project.Name)
-		return r.cleanupRGWAccount(ctx, project)
+	// Check if the namespace is being deleted
+	if !namespace.DeletionTimestamp.IsZero() {
+		logger.Infof("namespace %q is being deleted, cleaning up RGW account", namespace.Name)
+		return r.cleanupRGWAccount(ctx, namespace)
 	}
 
 	// Check if identity binding is enabled
-	if project.Annotations[IdentityBindingAnnotation] != "true" {
-		logger.Debugf("project %q does not have identity binding enabled, skipping", project.Name)
+	if namespace.Annotations[IdentityBindingAnnotation] != "true" {
+		logger.Debugf("namespace %q does not have identity binding enabled, skipping", namespace.Name)
 		return reconcile.Result{}, nil
 	}
 
 	// Check if account already exists (annotation is already set)
-	if accountARN, exists := project.Annotations[AccountARNAnnotation]; exists && accountARN != "" {
-		logger.Debugf("project %q already has RGW account %q, verifying", project.Name, accountARN)
-		return r.verifyRGWAccount(ctx, project)
+	if accountARN, exists := namespace.Annotations[AccountARNAnnotation]; exists && accountARN != "" {
+		logger.Debugf("namespace %q already has RGW account %q, verifying", namespace.Name, accountARN)
+		return r.verifyRGWAccount(ctx, namespace)
 	}
 
 	// Create new RGW User Account
-	logger.Infof("creating RGW User Account for project %q", project.Name)
-	return r.createRGWAccount(ctx, project)
+	logger.Infof("creating RGW User Account for namespace %q", namespace.Name)
+	return r.createRGWAccount(ctx, namespace)
 }
 
-// createRGWAccount creates a new RGW User Account for the project
-func (r *ReconcileTenantIdentity) createRGWAccount(ctx context.Context, project *projectv1.Project) (reconcile.Result, error) {
-	// Generate account ID based on project name
-	accountID := fmt.Sprintf("RGW%s", project.Name)
+// createRGWAccount creates a new RGW User Account for the namespace
+func (r *ReconcileTenantIdentity) createRGWAccount(ctx context.Context, namespace *corev1.Namespace) (reconcile.Result, error) {
+	// Generate account ID based on namespace name
+	accountID := fmt.Sprintf("RGW%s", namespace.Name)
 
-	logger.Infof("creating RGW User Account %q for project %q", accountID, project.Name)
+	logger.Infof("creating RGW User Account %q for namespace %q", accountID, namespace.Name)
 
 	// TODO: Implement actual RGW User Account creation using radosgw-admin
 	// This will require:
@@ -156,42 +149,42 @@ func (r *ReconcileTenantIdentity) createRGWAccount(ctx context.Context, project 
 	// 4. Create service account in the namespace
 
 	// For now, we'll create a placeholder implementation
-	err := r.createRGWUserAccount(ctx, project, accountID)
+	err := r.createRGWUserAccount(ctx, namespace, accountID)
 	if err != nil {
-		return reconcile.Result{}, errors.Wrapf(err, "failed to create RGW User Account for project %q", project.Name)
+		return reconcile.Result{}, errors.Wrapf(err, "failed to create RGW User Account for namespace %q", namespace.Name)
 	}
 
-	// Update project annotations with account ARN and role ARN
-	if project.Annotations == nil {
-		project.Annotations = make(map[string]string)
+	// Update namespace annotations with account ARN and role ARN
+	if namespace.Annotations == nil {
+		namespace.Annotations = make(map[string]string)
 	}
-	project.Annotations[AccountARNAnnotation] = accountID
-	project.Annotations[RoleARNAnnotation] = fmt.Sprintf("arn:aws:iam::%s:role/project-role", accountID)
+	namespace.Annotations[AccountARNAnnotation] = accountID
+	namespace.Annotations[RoleARNAnnotation] = fmt.Sprintf("arn:aws:iam::%s:role/namespace-role", accountID)
 
-	err = r.client.Update(ctx, project)
+	err = r.client.Update(ctx, namespace)
 	if err != nil {
-		return reconcile.Result{}, errors.Wrapf(err, "failed to update project %q annotations", project.Name)
+		return reconcile.Result{}, errors.Wrapf(err, "failed to update namespace %q annotations", namespace.Name)
 	}
 
-	logger.Infof("successfully created RGW User Account %q for project %q", accountID, project.Name)
+	logger.Infof("successfully created RGW User Account %q for namespace %q", accountID, namespace.Name)
 	return reconcile.Result{}, nil
 }
 
 // createRGWUserAccount creates the actual RGW User Account using radosgw-admin
-func (r *ReconcileTenantIdentity) createRGWUserAccount(ctx context.Context, project *projectv1.Project, accountID string) error {
+func (r *ReconcileTenantIdentity) createRGWUserAccount(ctx context.Context, namespace *corev1.Namespace, accountID string) error {
 	// TODO: Implement RGW User Account creation
 	// This will use radosgw-admin commands similar to:
 	// radosgw-admin account create --account-name=<accountID>
 	// radosgw-admin oidc-provider create --account-name=<accountID> --issuer=<cluster-issuer> --thumbprint=<thumbprint>
-	// radosgw-admin role create --account-name=<accountID> --role-name=project-role --assume-role-policy-doc=<policy>
+	// radosgw-admin role create --account-name=<accountID> --role-name=namespace-role --assume-role-policy-doc=<policy>
 
 	logger.Infof("creating RGW User Account %q (placeholder implementation)", accountID)
 
-	// Create service account in the project namespace
+	// Create service account in the namespace
 	sa := &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "rgw-identity",
-			Namespace: project.Name,
+			Namespace: namespace.Name,
 			Annotations: map[string]string{
 				"object.fusion.io/account-id": accountID,
 			},
@@ -200,31 +193,31 @@ func (r *ReconcileTenantIdentity) createRGWUserAccount(ctx context.Context, proj
 
 	err := r.client.Create(ctx, sa)
 	if err != nil && !kerrors.IsAlreadyExists(err) {
-		return errors.Wrapf(err, "failed to create service account in namespace %q", project.Name)
+		return errors.Wrapf(err, "failed to create service account in namespace %q", namespace.Name)
 	}
 
-	logger.Infof("created service account for RGW identity in namespace %q", project.Name)
+	logger.Infof("created service account for RGW identity in namespace %q", namespace.Name)
 	return nil
 }
 
 // verifyRGWAccount verifies that the RGW User Account still exists
-func (r *ReconcileTenantIdentity) verifyRGWAccount(ctx context.Context, project *projectv1.Project) (reconcile.Result, error) {
-	accountARN := project.Annotations[AccountARNAnnotation]
+func (r *ReconcileTenantIdentity) verifyRGWAccount(ctx context.Context, namespace *corev1.Namespace) (reconcile.Result, error) {
+	accountARN := namespace.Annotations[AccountARNAnnotation]
 
 	// TODO: Implement verification logic
 	// Check if the RGW User Account still exists using:
 	// radosgw-admin account info --account-name=<accountID>
 	// If not, recreate it
 
-	logger.Debugf("verified RGW User Account %q for project %q", accountARN, project.Name)
+	logger.Debugf("verified RGW User Account %q for namespace %q", accountARN, namespace.Name)
 	return reconcile.Result{RequeueAfter: 5 * time.Minute}, nil
 }
 
-// cleanupRGWAccount cleans up the RGW User Account when the project is deleted
-func (r *ReconcileTenantIdentity) cleanupRGWAccount(ctx context.Context, project *projectv1.Project) (reconcile.Result, error) {
-	accountARN, exists := project.Annotations[AccountARNAnnotation]
+// cleanupRGWAccount cleans up the RGW User Account when the namespace is deleted
+func (r *ReconcileTenantIdentity) cleanupRGWAccount(ctx context.Context, namespace *corev1.Namespace) (reconcile.Result, error) {
+	accountARN, exists := namespace.Annotations[AccountARNAnnotation]
 	if !exists || accountARN == "" {
-		logger.Debugf("no RGW account to clean up for project %q", project.Name)
+		logger.Debugf("no RGW account to clean up for namespace %q", namespace.Name)
 		return reconcile.Result{}, nil
 	}
 
@@ -232,7 +225,7 @@ func (r *ReconcileTenantIdentity) cleanupRGWAccount(ctx context.Context, project
 	// Delete the RGW User Account using:
 	// radosgw-admin account rm --account-name=<accountID>
 
-	logger.Infof("cleaned up RGW User Account %q for project %q", accountARN, project.Name)
+	logger.Infof("cleaned up RGW User Account %q for namespace %q", accountARN, namespace.Name)
 	return reconcile.Result{}, nil
 }
 
