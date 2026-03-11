@@ -29,8 +29,10 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
@@ -80,12 +82,13 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 	logger.Info("successfully started")
 
 	// Watch for changes to Kubernetes Namespaces
+	// Use a custom predicate since Namespaces don't have a Spec field
 	err = c.Watch(
 		source.Kind(
 			mgr.GetCache(),
 			&corev1.Namespace{},
 			&handler.TypedEnqueueRequestForObject[*corev1.Namespace]{},
-			opcontroller.WatchControllerPredicate[*corev1.Namespace](mgr.GetScheme()),
+			namespaceWatchPredicate(),
 		),
 	)
 	if err != nil {
@@ -94,6 +97,29 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 
 	logger.Info("tenant identity controller started watching namespaces")
 	return nil
+}
+
+// namespaceWatchPredicate is a custom predicate for watching Namespace objects
+// Simplified version that just logs events for debugging
+func namespaceWatchPredicate() predicate.TypedFuncs[*corev1.Namespace] {
+	return predicate.TypedFuncs[*corev1.Namespace]{
+		CreateFunc: func(e event.TypedCreateEvent[*corev1.Namespace]) bool {
+			logger.Infof("tenant-identity: CREATE event for namespace %q", e.Object.GetName())
+			return true
+		},
+		DeleteFunc: func(e event.TypedDeleteEvent[*corev1.Namespace]) bool {
+			logger.Infof("tenant-identity: DELETE event for namespace %q", e.Object.GetName())
+			return true
+		},
+		UpdateFunc: func(e event.TypedUpdateEvent[*corev1.Namespace]) bool {
+			logger.Infof("tenant-identity: UPDATE event for namespace %q", e.ObjectNew.GetName())
+			return true
+		},
+		GenericFunc: func(e event.TypedGenericEvent[*corev1.Namespace]) bool {
+			logger.Infof("tenant-identity: GENERIC event for namespace %q", e.Object.GetName())
+			return true
+		},
+	}
 }
 
 // Reconcile reads the state of Kubernetes Namespaces and creates RGW User Accounts for those with identity binding annotations
