@@ -26,7 +26,12 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/iam"
 	"github.com/pkg/errors"
+	"github.com/rook/rook/pkg/operator/ceph/object"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -36,7 +41,7 @@ import (
 type OIDCConfig struct {
 	IssuerURL   string
 	Thumbprints []string
-	ClientID    string
+	ClientIDs   []string // Audience values from JWT tokens
 }
 
 // GetClusterOIDCConfig retrieves the OIDC configuration from the OpenShift cluster
@@ -56,13 +61,21 @@ func GetClusterOIDCConfig(ctx context.Context, k8sClient client.Client) (*OIDCCo
 		return nil, errors.Wrap(err, "failed to get OIDC thumbprints")
 	}
 
+	// Get the client IDs (audience values) from the cluster
+	clientIDs, err := getServiceAccountAudiences(ctx, k8sClient, issuerURL)
+	if err != nil {
+		logger.Warningf("failed to get service account audiences, using defaults: %v", err)
+		// Fallback to common audience values
+		clientIDs = []string{issuerURL, "kubernetes.default.svc"}
+	}
+
 	config := &OIDCConfig{
 		IssuerURL:   issuerURL,
 		Thumbprints: thumbprints,
-		ClientID:    "sts.amazonaws.com", // Standard client ID for STS
+		ClientIDs:   clientIDs,
 	}
 
-	logger.Infof("retrieved OIDC config: issuer=%s, thumbprints=%v", config.IssuerURL, config.Thumbprints)
+	logger.Infof("retrieved OIDC config: issuer=%s, clientIDs=%v, thumbprints=%v", config.IssuerURL, config.ClientIDs, config.Thumbprints)
 	return config, nil
 }
 
@@ -87,6 +100,42 @@ func getServiceAccountIssuer(ctx context.Context, k8sClient client.Client) (stri
 	// Fallback to the default Kubernetes service
 	// In OpenShift, this is typically https://kubernetes.default.svc
 	return "https://kubernetes.default.svc", nil
+}
+
+// getServiceAccountAudiences retrieves the audience values that will be in service account JWT tokens
+func getServiceAccountAudiences(ctx context.Context, k8sClient client.Client, issuerURL string) ([]string, error) {
+	// In Kubernetes/OpenShift, the audience (aud claim) in service account tokens is typically:
+	// 1. The API server URL
+	// 2. The issuer URL itself
+	// 3. "kubernetes.default.svc" or similar
+
+	// Try to get the API server URL from the kubernetes service
+	svc := &corev1.Service{}
+	err := k8sClient.Get(ctx, client.ObjectKey{
+		Namespace: "default",
+		Name:      "kubernetes",
+	}, svc)
+
+	audiences := []string{}
+
+	if err == nil && svc.Spec.ClusterIP != "" {
+		// Add the API server URL as an audience
+		apiServerURL := fmt.Sprintf("https://%s", svc.Spec.ClusterIP)
+		audiences = append(audiences, apiServerURL)
+	}
+
+	// Always include the issuer URL as a valid audience
+	audiences = append(audiences, issuerURL)
+
+	// Add common Kubernetes service names
+	audiences = append(audiences, "kubernetes.default.svc", "kubernetes.default", "kubernetes")
+
+	// In OpenShift, also check for the API server hostname
+	// Try to get it from the infrastructure config
+	// For now, we'll use the common patterns
+
+	logger.Debugf("detected service account audiences: %v", audiences)
+	return audiences, nil
 }
 
 // getOIDCThumbprints retrieves the certificate thumbprints for the OIDC issuer
@@ -194,6 +243,98 @@ func GetServiceAccountToken(ctx context.Context, k8sClient client.Client, namesp
 	// For now, return a placeholder
 	logger.Debugf("service account %s found in namespace %s", serviceAccountName, namespace)
 	return "", errors.New("token retrieval not yet implemented - use projected volume tokens")
+}
+
+// CreateIAMClient creates an AWS IAM client for RGW
+func CreateIAMClient(objContext *object.Context, adminOpsContext *object.AdminOpsContext) (*iam.IAM, error) {
+	// Create AWS session with RGW endpoint
+	sess, err := session.NewSession(&aws.Config{
+		Credentials: credentials.NewStaticCredentials(
+			adminOpsContext.AdminOpsUserAccessKey,
+			adminOpsContext.AdminOpsUserSecretKey,
+			"",
+		),
+		Endpoint:         aws.String(objContext.Endpoint),
+		Region:           aws.String(""),
+		S3ForcePathStyle: aws.Bool(true),
+		DisableSSL:       aws.Bool(strings.HasPrefix(objContext.Endpoint, "http://")),
+	})
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to create AWS session")
+	}
+
+	return iam.New(sess), nil
+}
+
+// CreateOIDCProviderViaAPI creates an OIDC provider using the AWS IAM API
+func CreateOIDCProviderViaAPI(iamClient *iam.IAM, issuerURL string, thumbprints []string, clientIDs []string) (string, error) {
+	logger.Infof("creating OIDC provider via IAM API for issuer %q", issuerURL)
+
+	// Prepare thumbprint list
+	thumbprintList := make([]*string, len(thumbprints))
+	for i, tp := range thumbprints {
+		thumbprintList[i] = aws.String(tp)
+	}
+
+	// Prepare client ID list
+	clientIDList := make([]*string, len(clientIDs))
+	for i, cid := range clientIDs {
+		clientIDList[i] = aws.String(cid)
+	}
+	if len(clientIDList) == 0 {
+		// Default client ID for STS
+		clientIDList = []*string{aws.String("sts.amazonaws.com")}
+	}
+
+	// Create OIDC provider
+	input := &iam.CreateOpenIDConnectProviderInput{
+		Url:            aws.String(issuerURL),
+		ThumbprintList: thumbprintList,
+		ClientIDList:   clientIDList,
+	}
+
+	result, err := iamClient.CreateOpenIDConnectProvider(input)
+	if err != nil {
+		return "", errors.Wrapf(err, "failed to create OIDC provider for issuer %q", issuerURL)
+	}
+
+	providerARN := aws.StringValue(result.OpenIDConnectProviderArn)
+	logger.Infof("successfully created OIDC provider: %s", providerARN)
+	return providerARN, nil
+}
+
+// ListOIDCProvidersViaAPI lists OIDC providers using the AWS IAM API
+func ListOIDCProvidersViaAPI(iamClient *iam.IAM) ([]string, error) {
+	logger.Debug("listing OIDC providers via IAM API")
+
+	result, err := iamClient.ListOpenIDConnectProviders(&iam.ListOpenIDConnectProvidersInput{})
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to list OIDC providers")
+	}
+
+	var arns []string
+	for _, provider := range result.OpenIDConnectProviderList {
+		arns = append(arns, aws.StringValue(provider.Arn))
+	}
+
+	return arns, nil
+}
+
+// DeleteOIDCProviderViaAPI deletes an OIDC provider using the AWS IAM API
+func DeleteOIDCProviderViaAPI(iamClient *iam.IAM, providerARN string) error {
+	logger.Infof("deleting OIDC provider %q via IAM API", providerARN)
+
+	input := &iam.DeleteOpenIDConnectProviderInput{
+		OpenIDConnectProviderArn: aws.String(providerARN),
+	}
+
+	_, err := iamClient.DeleteOpenIDConnectProvider(input)
+	if err != nil {
+		return errors.Wrapf(err, "failed to delete OIDC provider %q", providerARN)
+	}
+
+	logger.Infof("successfully deleted OIDC provider %q", providerARN)
+	return nil
 }
 
 // Made with Bob
