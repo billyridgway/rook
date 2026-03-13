@@ -170,7 +170,7 @@ func CreateRole(c *object.Context, accountName, roleName, assumeRolePolicyDoc st
 	args := []string{
 		"role",
 		"create",
-		"--account-name", accountName,
+		"--account-id", accountName,
 		"--role-name", roleName,
 		"--assume-role-policy-doc", assumeRolePolicyDoc,
 	}
@@ -178,7 +178,9 @@ func CreateRole(c *object.Context, accountName, roleName, assumeRolePolicyDoc st
 	result, err := object.RunAdminCommandNoMultisite(c, false, args...)
 	if err != nil {
 		if strings.Contains(result, "role already exists") {
-			return nil, errors.Errorf("IAM role %q already exists for account %q", roleName, accountName)
+			logger.Infof("IAM role %q already exists for account %q, continuing", roleName, accountName)
+			// Try to get the existing role
+			return GetRole(c, accountName, roleName)
 		}
 		return nil, errors.Wrapf(err, "failed to create IAM role %q for account %q. %s", roleName, accountName, result)
 	}
@@ -191,6 +193,32 @@ func CreateRole(c *object.Context, accountName, roleName, assumeRolePolicyDoc st
 	}
 
 	logger.Infof("successfully created IAM role %q for account %q", roleName, accountName)
+	return &role, nil
+}
+
+// GetRole retrieves an IAM role from an RGW User Account
+func GetRole(c *object.Context, accountName, roleName string) (*IAMRole, error) {
+	logger.Debugf("getting IAM role %q for account %q", roleName, accountName)
+
+	args := []string{
+		"role",
+		"get",
+		"--account-id", accountName,
+		"--role-name", roleName,
+	}
+
+	result, err := object.RunAdminCommandNoMultisite(c, false, args...)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to get IAM role %q for account %q. %s", roleName, accountName, result)
+	}
+
+	// Parse the result
+	var role IAMRole
+	err = json.Unmarshal([]byte(result), &role)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to parse IAM role info. %s", result)
+	}
+
 	return &role, nil
 }
 

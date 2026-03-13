@@ -54,7 +54,7 @@ func CreatePolicy(c *object.Context, accountName, policyName, policyDocument str
 	args := []string{
 		"policy",
 		"create",
-		"--account-name", accountName,
+		"--account-id", accountName,
 		"--policy-name", policyName,
 		"--policy-doc", policyDocument,
 	}
@@ -62,7 +62,8 @@ func CreatePolicy(c *object.Context, accountName, policyName, policyDocument str
 	result, err := object.RunAdminCommandNoMultisite(c, false, args...)
 	if err != nil {
 		if strings.Contains(result, "policy already exists") {
-			return nil, errors.Errorf("IAM policy %q already exists for account %q", policyName, accountName)
+			logger.Infof("IAM policy %q already exists for account %q, continuing", policyName, accountName)
+			return GetPolicy(c, accountName, policyName)
 		}
 		return nil, errors.Wrapf(err, "failed to create IAM policy %q for account %q. %s", policyName, accountName, result)
 	}
@@ -78,14 +79,40 @@ func CreatePolicy(c *object.Context, accountName, policyName, policyDocument str
 	return &policy, nil
 }
 
+// GetPolicy retrieves an IAM policy from an RGW User Account
+func GetPolicy(c *object.Context, accountName, policyName string) (*Policy, error) {
+	logger.Debugf("getting IAM policy %q for account %q", policyName, accountName)
+
+	args := []string{
+		"policy",
+		"get",
+		"--account-id", accountName,
+		"--policy-name", policyName,
+	}
+
+	result, err := object.RunAdminCommandNoMultisite(c, false, args...)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to get IAM policy %q for account %q. %s", policyName, accountName, result)
+	}
+
+	// Parse the result
+	var policy Policy
+	err = json.Unmarshal([]byte(result), &policy)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to parse IAM policy info. %s", result)
+	}
+
+	return &policy, nil
+}
+
 // AttachRolePolicy attaches a policy to a role within an RGW User Account
 func AttachRolePolicy(c *object.Context, accountName, roleName, policyARN string) error {
 	logger.Infof("attaching policy %q to role %q in account %q", policyARN, roleName, accountName)
 
 	args := []string{
-		"role",
-		"attach-policy",
-		"--account-name", accountName,
+		"role-policy",
+		"attach",
+		"--account-id", accountName,
 		"--role-name", roleName,
 		"--policy-arn", policyARN,
 	}
