@@ -88,7 +88,7 @@ func decodeUser(data string) (*ObjectUser, int, error) {
 func GetUser(c *Context, id string) (*ObjectUser, int, error) {
 	logger.Debugf("getting s3 user %q", id)
 	// note: err is set for non-existent user but result output is also empty
-	result, err := runAdminCommand(c, false, "user", "info", "--uid", id)
+	result, err := RunAdminCommand(c, false, "user", "info", "--uid", id)
 	if strings.Contains(result, "no user info saved") {
 		return nil, RGWErrorNotFound, errors.New("warn: s3 user not found")
 	}
@@ -154,7 +154,7 @@ func CreateUser(c *Context, user ObjectUser, force bool) (*ObjectUser, int, erro
 		args = append(args, "--yes-i-really-mean-it")
 	}
 
-	result, err := runAdminCommandWithTimeout(c, true, timeout, args...)
+	result, err := RunAdminCommandWithTimeout(c, true, timeout, args...)
 	if err != nil {
 		if code, err := exec.ExtractExitCode(err); err == nil && code == int(syscall.EEXIST) {
 			return nil, ErrorCodeFileExists, errors.New("s3 user already exists")
@@ -206,7 +206,7 @@ func ListUserBuckets(c *Context, id string, opts ...string) (string, error) {
 		args = append(args, opts...)
 	}
 
-	result, err := runAdminCommand(c, false, args...)
+	result, err := RunAdminCommand(c, false, args...)
 
 	return result, errors.Wrapf(err, "failed to list buckets for user uid=%q", id)
 }
@@ -219,7 +219,7 @@ func DeleteUser(c *Context, id string, opts ...string) (string, error) {
 	if opts != nil {
 		args = append(args, opts...)
 	}
-	result, err := runAdminCommand(c, false, args...)
+	result, err := RunAdminCommand(c, false, args...)
 	if err != nil {
 		// If User does not exist return success
 		if code, ok := exec.ExitStatus(err); ok && code == int(syscall.ENOENT) {

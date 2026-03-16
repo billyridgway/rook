@@ -147,7 +147,7 @@ func removeObjectStoreFromMultisite(objContext *Context, spec cephv1.ObjectStore
 			}
 		}
 
-		_, err = runAdminCommand(objContext, false, "zone", "modify", endpointArg)
+		_, err = RunAdminCommand(objContext, false, "zone", "modify", endpointArg)
 		if err != nil {
 			return errors.Wrapf(err, "failed to remove object store %q endpoint from rgw zone %q", objContext.Name, spec.Zone.Name)
 		}
@@ -609,7 +609,7 @@ func deleteRealm(context *Context) error {
 		logger.Warningf("failed to delete rgw zonegroup %q. %v", context.Name, err)
 	}
 
-	_, err = runAdminCommand(context, false, "zone", "delete")
+	_, err = RunAdminCommand(context, false, "zone", "delete")
 	if err != nil {
 		logger.Warningf("failed to delete rgw zone %q. %v", context.Name, err)
 	}
@@ -1383,7 +1383,7 @@ func listsAreEqual(a, b []string) bool {
 }
 
 func CheckIfZonePresentInZoneGroup(objContext *Context) (bool, error) {
-	output, err := runAdminCommand(objContext, true, "zonegroup", "get")
+	output, err := RunAdminCommand(objContext, true, "zonegroup", "get")
 	if err != nil {
 		return false, err
 	}
