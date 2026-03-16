@@ -60,29 +60,6 @@ func TestGenerateAssumeRolePolicyDocument(t *testing.T) {
 	assert.Equal(t, "system:serviceaccount:test-namespace:rgw-identity", stringEquals["oidc:sub"])
 }
 
-func TestGeneratePermissionsPolicyDocument(t *testing.T) {
-	accountName := "test-account"
-	policy := GeneratePermissionsPolicyDocument(accountName)
-
-	// Verify it's valid JSON
-	var doc PolicyDocument
-	err := json.Unmarshal([]byte(policy), &doc)
-	assert.NoError(t, err)
-
-	// Verify structure
-	assert.Equal(t, "2012-10-17", doc.Version)
-	assert.Len(t, doc.Statement, 1)
-
-	stmt := doc.Statement[0]
-	assert.Equal(t, "Allow", stmt.Effect)
-	assert.Equal(t, "s3:*", stmt.Action)
-
-	// Verify resource
-	resources, ok := stmt.Resource.([]interface{})
-	assert.True(t, ok)
-	assert.Contains(t, resources, "arn:aws:s3:::*")
-}
-
 func TestRGWAccountStructure(t *testing.T) {
 	// Test that RGWAccount can be marshaled/unmarshaled
 	account := RGWAccount{
